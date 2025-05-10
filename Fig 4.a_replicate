@@ -1,0 +1,131 @@
+#使用R 4.3.3对文献的Fig 4.a 进行复刻
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+genomes_env<-read.csv("D:/data_diver/listeria_homework/李斯特菌结果复现/genomes_env.csv",sep=",",check.names = F)
+arg<-read.csv("D:/data_diver/listeria_homework/李斯特菌结果复现/ARG_functional_diversity.csv",sep=",",check.names = F)
+colnames(arg)[colnames(arg) == "id"] <- "Isolate ID" #更改列名
+
+arg_env <-merge(genomes_env,arg,by="Isolate ID")
+
+genomes_env_select <- arg_env %>% select(`richness`,16:49) #选取丰富度和34个影响因素
+
+#也可考虑使用 psych 包的corr.test（）命令，更加简单
+#library(psych)
+#test<-corr.test(genomes_env_select) #直接同时获得spearman的结果和P值
+
+# 提取列名
+columns <- colnames(genomes_env_select)
+
+#计算Spearman相关系数矩阵
+genomes_env_select_matrix <- cor(genomes_env_select[, columns ], method = "spearman",
+                                 use = "pairwise.complete.obs")  #对每对变量使用所有非缺失值进行计算
+
+#获取显著性（P值）结果矩阵
+p_value_matrix <- matrix(NA, nrow = ncol(genomes_env_select_matrix), 
+                         ncol = ncol(genomes_env_select_matrix)) # 初始化存放结果的矩阵
+rownames(p_value_matrix) <- colnames(genomes_env_select_matrix) #给显著性矩阵添加列名称
+colnames(p_value_matrix) <- colnames(genomes_env_select_matrix) #给显著性矩阵添加行名称
+
+for (i in 1:(ncol(genomes_env_select) - 1)) {
+  for (j in (i + 1):ncol(genomes_env_select)) {
+    # 提取两列数据进行cor.test
+    test_result <- cor.test(genomes_env_select[, columns[i]], 
+                            genomes_env_select[, columns[j]], 
+                            method = "spearman")
+    
+    # 填充p值到矩阵中
+    p_value_matrix[i, j] <- test_result$p.value
+    p_value_matrix[j, i] <- test_result$p.value  # 因为是成对的，所以对称位置相同
+  }
+}
+
+# 处理对角线上的值（自己与自己的相关性）
+diag(p_value_matrix) <- 0  # 对角线上的p值设为0，因为它们总是完全相关的
+
+# 根据 p 值生成显著性标记
+sig_value_matrix<-p_value_matrix
+sig_value_matrix[sig_value_matrix < 0.001] <- "***"
+sig_value_matrix[sig_value_matrix < 0.01 & p_value_matrix >= 0.001] <- "**"
+sig_value_matrix[sig_value_matrix < 0.05 & p_value_matrix >= 0.01] <- "*"
+sig_value_matrix[sig_value_matrix >= 0.05] <- "ns"
+
+#将spearman的rho系数和p值熔化为长数据
+library(reshape2)
+
+melted_cor_matrix <- melt(genomes_env_select_matrix)
+melted_sig_matrix <- melt(sig_value_matrix)
+melted_cor_matrix <- melted_cor_matrix[2:35,]
+melted_sig_matrix <- melted_sig_matrix[2:35,]
+
+names(melted_cor_matrix) = c("pc",'richness',"rho")
+names(melted_sig_matrix) = c("pc",'richness',"significance")
+
+cor_sig_matrix<-merge(melted_cor_matrix,melted_sig_matrix,by="pc")
+
+cor_sig_matrix <- cor_sig_matrix %>%
+  arrange(rho)  # 按照rho值升序排列
+
+cor_sig_matrix$pc<-factor(cor_sig_matrix$pc,levels=unique(cor_sig_matrix$pc))
+cor_sig_matrix$rho <- as.numeric(as.character(cor_sig_matrix$rho)) #转换为数值型
+
+ggplot(data=cor_sig_matrix, aes(x = richness.x, y = pc, fill =rho)) +
+  geom_tile() +
+  geom_text(aes(label=significance))+
+  scale_fill_gradientn(colours = c("#0077dd", "white","#ff5522"),
+                       limits=c(-0.31,0.31)) +
+  labs(x="ARG",y="Environment factors",fill = "Spearman ρ")+
+  #scale_y_discrete(labels = c())+
+  theme_minimal() 
+#geom_text(aes(label = ifelse(significance != "ns", significance, NA)), color = "black") #如果“significance”的值为"ns",则隐藏
+
+
+
+#对p值矩阵进行BH-FDR校正
+# 对矩阵中的每个p值进行BH校正
+# 将矩阵转换为向量进行调整，然后再转换回矩阵形式
+p_value_adj <- p.adjust(as.vector(p_value_matrix), method = "BH")
+p_value_matrix_adj <- matrix(p_value_adj, nrow = nrow(p_value_matrix), byrow = FALSE)
+
+# 给调整后的矩阵赋以相同的行列名
+rownames(p_value_matrix_adj) <- rownames(p_value_matrix)
+colnames(p_value_matrix_adj) <- colnames(p_value_matrix)
+
+# 根据 p 值生成显著性标记 (奇怪的是有个别数值漏标记，故后续手动处理)
+sig_value_matrix_adj<-p_value_matrix_adj
+sig_value_matrix_adj[sig_value_matrix_adj < 0.001] <- "***"
+sig_value_matrix_adj[sig_value_matrix_adj < 0.01 & p_value_matrix >= 0.001] <- "**"
+sig_value_matrix_adj[sig_value_matrix_adj < 0.05 & p_value_matrix >= 0.01] <- "*"
+sig_value_matrix_adj[sig_value_matrix_adj >= 0.05] <- "ns"
+
+
+#将spearman的rho系数和p值熔化为长数据
+melted_sig_matrix_adj <- melt(sig_value_matrix_adj)
+melted_sig_matrix_adj <-melted_sig_matrix_adj [2:35,]
+names(melted_sig_matrix_adj) = c("pc",'richness',"significance")
+
+melted_cor_matrix <- melt(genomes_env_select_matrix)
+melted_cor_matrix <- melted_cor_matrix[2:35,]
+names(melted_cor_matrix) = c("pc",'richness',"rho")
+melted_cor_matrix_adj<-melted_cor_matrix
+
+cor_sig_matrix_adj<-merge(melted_cor_matrix_adj,melted_sig_matrix_adj,by="pc")
+
+cor_sig_matrix_adj <- cor_sig_matrix_adj %>%
+  arrange(rho)  # 按照rho值升序排列
+
+cor_sig_matrix_adj$pc<-factor(cor_sig_matrix_adj$pc,levels=unique(cor_sig_matrix_adj$pc))
+cor_sig_matrix_adj$rho <- as.numeric(as.character(cor_sig_matrix_adj$rho)) #转换为数值型
+
+
+ggplot(data=cor_sig_matrix_adj, aes(x = richness.x, y = pc, fill =rho)) +
+  geom_tile() +
+  geom_text(aes(label=significance))+
+  scale_fill_gradientn(colours = c("#0077dd", "white","#ff5522"),
+                       limits=c(-0.31,0.31)) +
+  labs(x="ARG",y="Environment factors",fill = "Spearman ρ")+
+  #scale_y_discrete(labels = c())+
+  theme_minimal() 
+
+#结果的趋势与原文献大体相同，但具有显著性的数值要多于原文献；推测可能是因为原文献使用了python代码，一些细节设置上与在R复刻的代码存在差异

@@ -1,0 +1,159 @@
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+# 读取数据
+genomes_env <- read.csv("D:/data_diver/listeria_homework/李斯特菌结果复现/genomes_env.csv", sep = ",", check.names = F)
+arg <- read.csv("D:/data_diver/listeria_homework/李斯特菌结果复现/ARG_functional_diversity.csv", sep = ",", check.names = F)
+colnames(arg)[colnames(arg) == "id"] <- "Isolate ID" # 更改列名
+
+arg_env <- merge(genomes_env, arg, by = "Isolate ID")
+
+genomes_env_select <- arg_env %>% select(`richness`, 16:49) # 选取丰富度和34个影响因素
+
+# 计算Spearman相关系数矩阵
+cor_matrix <- cor(genomes_env_select[, -1], genomes_env_select$richness, method = "spearman", use = "pairwise.complete.obs")
+
+# 获取显著性（P值）结果矩阵
+p_value_matrix <- matrix(NA, nrow = ncol(genomes_env_select) - 1, ncol = 1)
+rownames(p_value_matrix) <- colnames(genomes_env_select)[-1]
+
+for (i in 1:(ncol(genomes_env_select) - 1)) {
+  test_result <- cor.test(genomes_env_select[, i + 1], genomes_env_select$richness, method = "spearman")
+  p_value_matrix[i] <- test_result$p.value
+}
+
+# 将矩阵转换为向量进行fdr校正
+p_value_vector <- as.vector(p_value_matrix)
+p_value_adj_vector <- p.adjust(p_value_vector, method = "bonferroni") # 使用Bonferroni方法或改为 "BH" 作为FDR校正
+
+# 转换回矩阵格式
+p_value_matrix_adj <- matrix(p_value_adj_vector, nrow = nrow(p_value_matrix), byrow = FALSE)
+
+# 给调整后的矩阵赋以相同的行列名
+rownames(p_value_matrix_adj) <- rownames(p_value_matrix)
+colnames(p_value_matrix_adj) <- colnames(p_value_matrix)
+
+
+# 根据 p 值生成显著性标记
+sig_value_matrix <- p_value_matrix_adj
+sig_value_matrix[sig_value_matrix < 0.001] <- "***"
+sig_value_matrix[sig_value_matrix < 0.01 & sig_value_matrix >= 0.001] <- "**"
+sig_value_matrix[sig_value_matrix < 0.05 & sig_value_matrix >= 0.01] <- "*"
+sig_value_matrix[sig_value_matrix >= 0.05] <- "ns"
+
+# 将spearman的rho系数和p值熔化为长数据
+melted_cor_matrix <- data.frame(
+  pc = rownames(cor_matrix),
+  rho = as.numeric(cor_matrix),
+  significance = as.character(sig_value_matrix)
+)
+
+melted_cor_matrix <- melted_cor_matrix %>%
+  arrange(rho)  # 按照rho值升序排列
+
+melted_cor_matrix$rho<-factor(melted_cor_matrix$rho,levels=unique(melted_cor_matrix$rho))
+melted_cor_matrix$rho <- as.numeric(as.character(melted_cor_matrix$rho)) #转换为数值型
+# 对数据框按 rho 值排序
+melted_cor_matrix <- melted_cor_matrix[order(melted_cor_matrix$rho), ]
+# 将 pc 列转换为因子类型，并设置水平按 rho 值排序
+melted_cor_matrix$pc <- factor(melted_cor_matrix$pc, levels = unique(melted_cor_matrix$pc))
+
+# 绘制热图
+ggplot(data = melted_cor_matrix, aes(x = "", y = pc, fill=rho )) +
+  geom_tile() +
+  geom_text(aes(label = significance), size = 3) +
+  scale_fill_gradientn(colours = c("#ff5522", "white", "#0077dd"),
+                       limits = c(-0.31, 0.31),
+                       name = "Spearman's rank correlation coefficient") +
+  labs(title = "ARG richness in Listeria genomes",
+       x = "",
+       y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "right",
+        legend.title.align = 0.5,
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  coord_fixed(ratio = 0.15) 
+
+
+#将spearman分析替换为偏spearman分析（Partial Spearman correlation analysis）
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(tidyr)
+#ppcor包用于进行偏pearson/spearman相关分析，但是加载会与dplyr包起冲突，故不加载
+
+# 读取数据
+genomes_env <- read.csv("D:/data_diver/listeria_homework/李斯特菌结果复现/genomes_env.csv", sep = ",", check.names = F)
+arg <- read.csv("D:/data_diver/listeria_homework/李斯特菌结果复现/ARG_functional_diversity.csv", sep = ",", check.names = F)
+colnames(arg)[colnames(arg) == "id"] <- "Isolate ID" # 更改列名
+
+arg_env <- merge(genomes_env, arg, by = "Isolate ID")
+
+genomes_env_select <- arg_env %>% select(`richness`, 16:49) # 选取丰富度和34个影响因素
+
+genomes_env_select <- genomes_env_select %>%
+  mutate_all(~replace_na(.x, mean(.x, na.rm = TRUE))) #对于每一列（.x），用该列的均值（mean(.x, na.rm = TRUE)）替换缺失值（NA）
+
+# 使用 ppcor::pcor 计算偏相关矩阵
+partial_cor_result <- ppcor::pcor(genomes_env_select, method = "spearman")
+
+# 提取与 richness 的部分相关系数
+partial_cor_matrix <- partial_cor_result$estimate["richness", ]
+
+# 校正多重检验（可选）
+#p_value_adj_vector <- apply(partial_cor_result$p.value, 1, function(x) p.adjust(x, method = "BH"))["richness", ]
+
+# 显著性标记
+#sig_value_matrix <- ifelse(p_value_adj_vector < 0.001, "***",
+                           #ifelse(p_value_adj_vector < 0.01, "**",
+                            #      ifelse(p_value_adj_vector < 0.05, "*", "ns")))
+
+# 提取对应的p值（不进行多重检验校正）
+p_value_matrix <- partial_cor_result$p.value["richness", ]
+
+# 生成显著性标记，使用原始p值
+sig_value_matrix <- ifelse(p_value_matrix < 0.001, "***",
+                           ifelse(p_value_matrix < 0.01, "**",
+                                  ifelse(p_value_matrix < 0.05, "*", "ns")))
+
+
+# 构建绘图用的数据框
+melted_cor_matrix <- data.frame(
+  pc = names(partial_cor_matrix),
+  rho = as.numeric(partial_cor_matrix),
+  significance = sig_value_matrix
+)
+
+# 排序（按rho值从小到大）
+melted_cor_matrix <- melted_cor_matrix[order(melted_cor_matrix$rho), ]
+
+# 将pc设为因子以保持排序
+melted_cor_matrix$pc <- factor(melted_cor_matrix$pc,
+                               levels = melted_cor_matrix$pc)
+
+melted_cor_matrix<-melted_cor_matrix[1:34,]
+
+# 绘制热图
+ggplot(data = melted_cor_matrix, aes(x = "", y = pc, fill = rho)) +
+  geom_tile() +
+  geom_text(aes(label = significance), size = 3) +
+  scale_fill_gradientn(colours = c("#ff5522", "white", "#0077dd"),
+                       limits = c(-1, 1),
+                       name = "Partial Spearman's ρ") +
+  labs(title = "Partial Spearman Correlation with ARG Richness",
+       x = "",
+       y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "right",
+        legend.title.align = 0.5,
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  coord_fixed(ratio = 0.15)

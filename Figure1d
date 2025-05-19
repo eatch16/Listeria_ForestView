@@ -1,0 +1,112 @@
+# 加载必要的包
+library(tidyverse)
+library(ggpubr)
+library(ggrepel)
+library(readr)
+
+# 设置工作路径
+data_path <- "E:/test/"
+out_path <- "E:/test/"
+
+# 读取ANI数据
+anv <- read_delim(paste0(data_path, "ANIb_percentage_identity.tab"), 
+                  delim = "\t", col_names = TRUE) %>%
+  column_to_rownames(var = names(.)[1])
+
+# 读取基因组信息
+genomes_env <- read_csv(paste0(data_path, "genomes_env.csv")) %>%
+  column_to_rownames(var = names(.)[1])
+
+# 转换ANI矩阵为长格式
+Anv_all <- anv %>%
+  as.matrix() %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Row") %>%
+  pivot_longer(cols = -Row, names_to = "Column", values_to = "Genetic Similarity") %>%
+  filter(Row != Column) # 移除自比较
+
+# 添加物种信息
+species_df <- genomes_env %>%
+  rownames_to_column(var = "Isolate ID") %>%
+  select(`Isolate ID`, Species)
+
+species_name <- setNames(species_df$Species, species_df$`Isolate ID`)
+
+Anv_all <- Anv_all %>%
+  mutate(Species = recode(Column, !!!species_name),
+         Selected_Species = recode(Row, !!!species_name)) %>%
+  select(Species, Selected_Species, `Genetic Similarity`)
+
+# 筛选只包含非L.monocytogenes与L.monocytogenes的比较
+Anv_Lmono <- Anv_all %>%
+  filter(Species != "L. monocytogenes",
+         Selected_Species == "L. monocytogenes") %>%
+  group_by(Species) %>%
+  summarise(`Genetic Similarity` = mean(`Genetic Similarity`))
+
+# 读取ARG多样性数据
+arg_div <- read_csv(paste0(out_path, "ARG_functional_diversity.csv")) %>%
+  column_to_rownames(var = names(.)[1]) %>%
+  rownames_to_column(var = "id") %>%
+  mutate(Species = recode(id, !!!species_name)) %>%
+  group_by(Species) %>%
+  summarise(shannon = mean(shannon),
+            richness = mean(richness)) %>%
+  filter(Species != "L. monocytogenes")
+
+# 合并数据
+arg_div_mean <- inner_join(arg_div, Anv_Lmono, by = "Species")
+
+# 定义sensu stricto物种
+sensu_stricto_species <- c('L. monocytogenes', 'L. seeligeri', 'L. marthii', 'L. ivanovii',
+                           'L. welshimeri', 'L. innocua', 'L. cossartiae', 'L. farberi',
+                           'L. immobilis', 'L. swaminathanii')
+
+# 添加分类信息
+arg_div_mean <- arg_div_mean %>%
+  mutate(`Listeria species` = ifelse(Species %in% sensu_stricto_species, 
+                                     "sensu stricto", "sensu lato"))
+
+# 定义颜色
+color_palette <- c("sensu stricto" = "#5F9EA0", "sensu lato" = "#FF7F50")
+
+# 计算Spearman相关性
+cor_test <- cor.test(arg_div_mean$richness, arg_div_mean$`Genetic Similarity`, 
+                     method = "spearman")
+r <- cor_test$estimate
+p <- cor_test$p.value
+
+# 绘制图形
+p <- ggplot(arg_div_mean, aes(x = `Genetic Similarity`, y = richness, 
+                              color = `Listeria species`)) +
+  geom_point(size = 5, alpha = 0.7, shape = 16) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 1) +
+  scale_color_manual(values = color_palette) +
+  labs(x = "Genetic similarity to L. monocytogenes", 
+       y = "Average richness", 
+       title = "Functional ARGs") +
+  theme_pubr() +
+  theme(legend.position = "right",
+        plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 13),
+        axis.text = element_text(size = 12)) +
+  annotate("text", x = min(arg_div_mean$`Genetic Similarity`), 
+           y = max(arg_div_mean$richness), 
+           label = sprintf("Spearman ρ=%.2f, P=%.2g", r, p),
+           hjust = 0, vjust = 1, size = 4.5) +
+  coord_cartesian(xlim = c(0.72, 0.91), ylim = c(-0.25, 5.5))
+
+# 导出高分辨率TIFF图片
+ggsave(
+  filename = paste0(out_path, "ARG_functional_richness_phylodistance_toLM.tiff"),
+  plot = p,
+  device = "tiff",
+  width = 4.5,
+  height = 4,
+  units = "in",
+  dpi = 600,
+  compression = "lzw"
+)
+
+# 显示图形
+print(p)

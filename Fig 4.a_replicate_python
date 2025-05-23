@@ -1,0 +1,123 @@
+python  # python 3.12.9 复刻结果
+
+# 加载函数与数据
+import pandas as pd
+from scipy import stats
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+env = pd.read_csv( "D:/data_diver/listeria_homework/data/environ_all.csv", index_col=0)
+env = env.fillna(env.mean())
+genome = pd.read_csv("D:/data_diver/listeria_homework/data/Listeria_genomes.csv", index_col=0)
+genome_id = genome[["Sample ID", "Species"]]
+average_values = pd.read_csv('D:/data_diver/listeria_homework/data/gen_sim.csv')
+
+genome_id = genome_id.reset_index()
+# 获得每个基因组与病原菌LM的相似性
+genome_id_sim = pd.merge(
+    genome_id, average_values, how="left", left_on="Species", right_on="Species"
+)[["Isolate ID", "Sample ID", "Genetic Similarity"]]
+# 将LM基因组与LM的相似性设置为1
+genome_id_sim = genome_id_sim.fillna(1)
+
+genomes_env = pd.merge(
+    genome_id_sim, env, how="left", left_on="Sample ID", right_index=True
+).drop(columns=["Sample ID"])
+genomes_env = genomes_env.set_index("Isolate ID")
+arg_div = (
+    pd.read_csv("D:/data_diver/listeria_homework/data/ARG_functional_diversity.csv", index_col=0)
+    .sort_index()
+    .rename_axis("Isolate ID")
+)
+
+#合并数据
+arg_env = pd.merge(arg_div, genomes_env, left_index=True, right_index=True)
+#查看数据
+arg_env.to_excel( sheet_name="Sheet1", index=False,excel_writer = "D:/data_diver/listeria_homework/data/测试文档.xlsx")
+
+# 通过控制基因组与LM病原菌的相似性来进行偏斯皮尔曼相关（perform spearman correlation）分析
+
+from pingouin import partial_corr
+
+def par_spearman(environment_merged_data, diversity):
+    env_var_list = []
+    corr_coeff_list = []
+    p_value_list = []
+    for i in environment_merged_data.iloc[:, 3:].columns:
+        res = partial_corr(
+            environment_merged_data,
+            x=diversity,
+            y=i,
+            covar="Genetic Similarity",
+            method="spearman",
+        )
+        env_var_list.append(i)
+        corr_coeff_list.append(res["r"].values[0])
+        p_value_list.append(res["p-val"].values[0])
+    environment_corr_df = pd.DataFrame(
+        {
+            "Env_factor": env_var_list,
+            "spearmanr_coefficient": corr_coeff_list,
+            "pvalue": p_value_list,
+        }
+    )
+    return environment_corr_df
+
+# 对基因组的ARGs丰度与环境变量之间的斯皮尔曼相关性分析
+environment_corr_df = par_spearman(arg_env, "richness")
+
+environment_corr_df.reset_index(inplace=True)
+environment_corr_df.rename(columns={"index": "Id"}, inplace=True)
+environment_corr_df
+environment_corr_df.sort_values(by="pvalue", inplace=True, ascending=True)
+environment_corr_df["fdr_adjusted_pvalue"] = stats.false_discovery_control(
+    environment_corr_df.pvalue
+)
+environment_corr_df.sort_values(by="Id", inplace=True)
+
+
+conditions = [
+    environment_corr_df["fdr_adjusted_pvalue"] < 0.0001,
+    environment_corr_df["fdr_adjusted_pvalue"] < 0.001,
+    environment_corr_df["fdr_adjusted_pvalue"] < 0.01,
+    environment_corr_df["fdr_adjusted_pvalue"] < 0.05,
+    environment_corr_df["fdr_adjusted_pvalue"] >= 0.05,
+]
+choices = ["****", "***", "**", "*", "ns"]
+environment_corr_df["asterisk"] = np.select(conditions, choices, default='0')
+
+environment_corr_df.sort_values("spearmanr_coefficient", ascending=False, inplace=True)
+environment_corr_df
+
+table = pd.pivot_table(
+    environment_corr_df,
+    values="spearmanr_coefficient",
+    index=["Env_factor"],
+    columns=[],
+    aggfunc="mean",
+)
+table = table.sort_values("spearmanr_coefficient", ascending=False)
+x = environment_corr_df["asterisk"].values
+x = np.array(x).reshape(1, -1)
+
+plt.rcParams["figure.figsize"] = (2, 8)
+fig, ax = plt.subplots()
+sns.heatmap(
+    table[["spearmanr_coefficient"]],
+    annot=x.T,
+    vmin=-0.3,
+    vmax=0.3,
+    fmt="",
+    cmap="PuOr",
+    cbar_kws={"label": "Spearman coefficient"},
+    ax=ax,
+)
+ax.figure.axes[-1].yaxis.label.set_size(15)
+yticks = ax.get_yticklabels()
+plt.ylabel("")
+ax.set_title("ARG richness in Listeria genomes", fontsize=13)
+# 移除x轴的刻度标签
+ax.set_xticklabels("")
+plt.savefig("D:/data_diver/listeria_homework/data/ARG_richness_env_cor.pdf", bbox_inches="tight", dpi=300)
+plt.show()

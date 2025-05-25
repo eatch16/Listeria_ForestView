@@ -1,0 +1,79 @@
+# 加载必要的R包
+library(readxl)
+library(vegan)
+library(VennDiagram)
+library(ggplot2)
+
+# 读取Excel文件
+data <- read_excel("C:/Users/PC/Desktop/norB_pairwise_distances.xlsx")
+
+# 查看数据结构
+print(head(data))
+
+# 确保数据是数值型
+geolocation_data <- as.matrix(data[, c("distance", "Elevation","Moisture")])
+soil_property_data <- as.matrix(data[, c("Totalnitrogen", "Totalcarbon","pH","Organicmatter",
+                                         "Aluminum","Calcium","Copper","Iron","Potassium","Magnesium",
+                                         "Manganese","Molybdenum","Sodium","Phosphorus","Sulfur",
+                                         "Zinc")])
+
+climate_data <- as.matrix(data[, c("Precipitation", "Maxtemperature","Mintemperature","Windspeed")])
+land_use_data <- as.matrix(data[, c("Openwater", "Developed1","Developed2","Barren",
+                                    "Forest","Shrubland","Grassland","Cropland",
+                                    "Pasture","Wetland")])# 提取每个维度的数据
+# 确保所有数据都是数值型
+geolocation_data <- apply(geolocation_data, 2, as.numeric)
+soil_property_data <- apply(soil_property_data, 2, as.numeric)
+climate_data <- apply(climate_data, 2, as.numeric)
+land_use_data <- apply(land_use_data, 2, as.numeric)
+
+# 检查是否有非数值型数据
+if (any(sapply(geolocation_data, is.character)) || any(is.na(geolocation_data)) ||
+    any(sapply(soil_property_data, is.character)) || any(is.na(soil_property_data)) ||
+    any(sapply(climate_data, is.character)) || any(is.na(climate_data)) ||
+    any(sapply(land_use_data, is.character)) || any(is.na(land_use_data))) {
+  stop("There are non-numeric or NA values in the data. Please check and handle them.")
+}
+
+# 处理缺失值
+geolocation_data <- na.omit(geolocation_data)
+soil_property_data <- na.omit(soil_property_data)
+land_use_data <- na.omit(land_use_data)
+climate_data <- na.omit(climate_data)
+
+# 计算每个维度的综合贡献
+geolocation_dissimilarity <- vegdist(geolocation_data, method = "euclidean")
+soil_property_dissimilarity <- vegdist(soil_property_data, method = "euclidean")
+climate_dissimilarity <- vegdist(climate_data, method = "euclidean")
+land_use_dissimilarity <- vegdist(land_use_data, method = "euclidean")
+
+# 假设的基因序列差异矩阵（示例数据）
+norB_dissimilarity <- vegdist(as.matrix(data[, "norB"]), method = "euclidean")
+
+# 进行VPA分析
+vpa_result <- varpart(norB_dissimilarity, 
+                      ~ geolocation_dissimilarity + soil_property_dissimilarity + 
+                        land_use_dissimilarity + climate_dissimilarity)
+
+# 绘制VPA结果
+plot(vpa_result)
+
+# 提取VPA结果中的贡献比例
+geolocation_contribution <- vpa_result$var.part[1]
+soil_contribution <- vpa_result$var.part[2]
+land_use_contribution <- vpa_result$var.part[3]
+climate_contribution <- vpa_result$var.part[4]
+
+# 绘制Venn图
+venn.plot <- draw.quad.venn(
+  area1 = geolocation_contribution,
+  area2 = soil_contribution,
+  area3 = land_use_contribution,
+  area4 = climate_contribution,
+  category = c("Geolocation", "Soil Property", "Land Use", "Climate"),
+  fill = c("red", "blue", "green", "purple"),
+  alpha = 0.5
+)
+
+# 显示Venn图
+grid.draw(venn.plot)

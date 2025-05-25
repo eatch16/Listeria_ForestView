@@ -1,0 +1,71 @@
+# 加载必要的包
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(ggpubr)
+library(tibble)
+# 设置工作路径
+data_path <- "E:/test/"
+out_path <- "E:/test/"
+
+# 设置图形大小
+options(repr.plot.width=8, repr.plot.height=4)
+
+# 读取数据
+genomes_env <- read_csv(paste0(data_path, "genomes_env.csv")) %>% 
+  column_to_rownames(var = names(.)[1])
+
+arg_functional <- read_csv(paste0(out_path, "ARG_functional_diversity.csv")) %>% 
+  column_to_rownames(var = names(.)[1])
+
+arg_present <- read_csv(paste0(out_path, "ARG_present_diversity.csv")) %>% 
+  column_to_rownames(var = names(.)[1])
+
+# 合并数据
+spe_functional <- merge(genomes_env["Species"], arg_functional, by = "row.names") %>%
+  select(-Row.names) %>%
+  mutate(group = "functional") %>%
+  arrange(desc(richness))
+
+spe_present <- merge(genomes_env["Species"], arg_present, by = "row.names") %>%
+  select(-Row.names) %>%
+  mutate(group = "present") %>%
+  arrange(desc(richness))
+
+spe_ARG <- bind_rows(spe_functional, spe_present)
+
+# 添加随机抖动
+set.seed(123) # 设置随机种子保证可重复性
+spe_ARG <- spe_ARG %>%
+  mutate(Jittered_richness = richness + runif(n(), 0, 0.15))
+
+# 创建绘图
+p <- ggplot(spe_ARG, aes(x = Species, y = richness, fill = group)) +
+  geom_bar(stat = "identity", position = position_dodge(), width = 0.7) +
+  geom_point(aes(y = Jittered_richness, color = group), 
+             position = position_jitterdodge(jitter.width = 0.3, dodge.width = 0.7),
+             size = 2, alpha = 0.6, color = "white") +
+  scale_fill_manual(values = c("#D98880", "#A9CCE3")) +
+  labs(x = "", y = "Richness", title = "Richness of ARGs by Listeria species") +
+  theme_pubr() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.title.y = element_text(size = 13),
+    plot.title = element_text(size = 15),
+    legend.position = "top"
+  )
+
+# 保存图形
+# ggsave(paste0(out_path, "ARG_richness_species.pdf"), p, width = 8, height = 4, dpi = 300)
+ggsave(
+  filename = paste0(out_path, "ARG_richness_species.tiff"),
+  plot = p,
+  device = "tiff",
+  width = 8,          # 宽度(英寸)
+  height = 4,         # 高度(英寸)
+  units = "in",       # 尺寸单位(英寸)
+  dpi = 600,          # 分辨率(600dpi)
+  compression = "lzw" # 压缩算法(LZW无损压缩)
+)
+# 显示图形
+print(p)
